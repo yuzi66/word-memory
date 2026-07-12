@@ -1,0 +1,33 @@
+# Root .gitignore for task-board project
+# Frontend (Next.js)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build
+frontend/.vercel
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
+frontend/.env*
+frontend/.pnp
+frontend/.pnp.*
+
+# Backend (Flask/Python)
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+backend/.env*
+backend/.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+*.pem
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
