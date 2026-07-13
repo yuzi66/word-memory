@@ -1,3 +1,4 @@
+from datetime import datetime
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
@@ -21,8 +22,8 @@ def create_task():
         'description': data.get('description', ''),
         'status': 'todo',
         'priority': 'medium',
-        'created_at': None,
-        'updated_at': None
+        'created_at': datetime.now().isoformat(),
+        'updated_at': datetime.now().isoformat()
     }
     next_id += 1
     tasks.append(task)
@@ -45,7 +46,7 @@ def update_task(task_id):
     task['description'] = data.get('description', task['description'])
     task['status'] = data.get('status', task['status'])
     task['priority'] = data.get('priority', task['priority'])
-    task['updated_at'] = None
+    task['updated_at'] = datetime.now().isoformat()
     return jsonify(task), 200
 
 @app.route('/api/tasks/<int:task_id>', methods=['DELETE'])
