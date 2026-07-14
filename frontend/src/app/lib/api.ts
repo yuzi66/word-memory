@@ -9,13 +9,25 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || 'Request failed');
+    let message = err.error || 'Request failed';
+    if (err.details) {
+      const detailMessages = Object.values(err.details).join('; ');
+      message = `${message}: ${detailMessages}`;
+    }
+    throw new Error(message);
   }
   return res.json();
 }
 
+function buildQuery(params: Record<string, string>): string {
+  const filtered = Object.entries(params).filter(([_, v]) => v.trim() !== '');
+  if (filtered.length === 0) return '';
+  return '?' + filtered.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+}
+
 export const api = {
-  getTasks: () => request<Task[]>('/tasks'),
+  getTasks: (filters?: { q?: string; status?: string; priority?: string }) =>
+    request<Task[]>(`/tasks${buildQuery({ q: filters?.q || '', status: filters?.status || '', priority: filters?.priority || '' })}`),
 
   getTask: (id: number) => request<Task>(`/tasks/${id}`),
 

@@ -37,21 +37,29 @@ export default function TaskBoard() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string>('');
+  const [filterPriority, setFilterPriority] = useState<string>('');
 
   const fetchTasks = useCallback(async () => {
     try {
       setError(null);
-      const data = await api.getTasks();
+      const data = await api.getTasks({
+        q: search,
+        status: filterStatus,
+        priority: filterPriority,
+      });
       setTasks(data);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [search, filterStatus, filterPriority]);
 
   useEffect(() => {
-    fetchTasks();
+    const timer = setTimeout(() => { fetchTasks(); }, 200);
+    return () => clearTimeout(timer);
   }, [fetchTasks]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -122,7 +130,7 @@ export default function TaskBoard() {
 
   return (
     <div className="flex-1 w-full max-w-7xl mx-auto px-4 py-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-zinc-50">\u4E2A\u4EBA\u4EFB\u52A1\u770B\u677F</h1>
           <p className="text-sm text-gray-500 dark:text-zinc-400 mt-1">\u7BA1\u7406\u4F60\u7684\u4EFB\u52A1\uFF0C\u63D0\u5347\u5DE5\u4F5C\u6548\u7387</p>
@@ -144,6 +152,41 @@ export default function TaskBoard() {
           <button onClick={() => setError(null)} className="ml-2 underline">\u5173\u95ED</button>
         </div>
       )}
+
+      <div className="flex flex-col sm:flex-row gap-2 mb-4">
+        <div className="relative flex-1">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="\u641C\u7D22\u4EFB\u52A1\u6807\u9898\u6216\u63CF\u8FF0..."
+            className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-sm text-gray-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <select
+          value={filterStatus}
+          onChange={e => setFilterStatus(e.target.value)}
+          className="px-3 py-2 border border-gray-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-sm text-gray-700 dark:text-zinc-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="">\u5168\u90E8\u72B6\u6001</option>
+          <option value="todo">\u5F85\u529E</option>
+          <option value="in_progress">\u8FDB\u884C\u4E2D</option>
+          <option value="done">\u5DF2\u5B8C\u6210</option>
+        </select>
+        <select
+          value={filterPriority}
+          onChange={e => setFilterPriority(e.target.value)}
+          className="px-3 py-2 border border-gray-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-sm text-gray-700 dark:text-zinc-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="">\u5168\u90E8\u4F18\u5148\u7EA7</option>
+          <option value="low">\u4F4E</option>
+          <option value="medium">\u4E2D</option>
+          <option value="high">\u9AD8</option>
+        </select>
+      </div>
 
       {showForm && (
         <div className="mb-6 p-4 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl shadow-sm">
@@ -173,18 +216,12 @@ export default function TaskBoard() {
               />
             </div>
             <div className="flex gap-2">
-              <button
-                type="submit"
-                disabled={submitting || !title.trim()}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-              >
+              <button type="submit" disabled={submitting || !title.trim()}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors">
                 {submitting ? '\u4FDD\u5B58\u4E2D...' : editingTask ? '\u4FDD\u5B58' : '\u521B\u5EFA'}
               </button>
-              <button
-                type="button"
-                onClick={handleCancel}
-                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-zinc-300 border border-gray-300 dark:border-zinc-700 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors"
-              >
+              <button type="button" onClick={handleCancel}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-zinc-300 border border-gray-300 dark:border-zinc-700 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors">
                 \u53D6\u6D88
               </button>
             </div>
@@ -231,11 +268,8 @@ export default function TaskBoard() {
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${PRIORITY_COLORS[task.priority]}`}>
                         {PRIORITY_LABELS[task.priority]}
                       </span>
-                      <select
-                        value={task.priority}
-                        onChange={e => handlePriorityChange(task, e.target.value as TaskPriority)}
-                        className="text-[10px] border-none bg-transparent text-gray-400 cursor-pointer focus:outline-none"
-                      >
+                      <select value={task.priority} onChange={e => handlePriorityChange(task, e.target.value as TaskPriority)}
+                        className="text-[10px] border-none bg-transparent text-gray-400 cursor-pointer focus:outline-none">
                         <option value="low">\u4F4E</option>
                         <option value="medium">\u4E2D</option>
                         <option value="high">\u9AD8</option>
@@ -243,15 +277,11 @@ export default function TaskBoard() {
                     </div>
                     <div className="flex items-center gap-1 mt-2">
                       {(['todo', 'in_progress', 'done'] as TaskStatus[]).map(s => (
-                        <button
-                          key={s}
-                          onClick={() => handleStatusChange(task, s)}
+                        <button key={s} onClick={() => handleStatusChange(task, s)}
                           className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
                             task.status === s
                               ? STATUS_COLORS[s]
-                              : 'bg-transparent text-gray-300 dark:text-zinc-600 hover:bg-gray-100 dark:hover:bg-zinc-700'
-                          }`}
-                        >
+                              : 'bg-transparent text-gray-300 dark:text-zinc-600 hover:bg-gray-100 dark:hover:bg-zinc-700'}`}>
                           {STATUS_LABELS[s]}
                         </button>
                       ))}
