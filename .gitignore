@@ -34,3 +34,8 @@ Thumbs.db
 
 # Database
 backend/tasks.db
+backend/*.db
+frontend/dist/
+server/
+.vercel
+.env*
