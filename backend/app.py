@@ -1,148 +1,165 @@
-import sqlite3
-import os
-from datetime import datetime
+import pymysql
+from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-DATABASE = os.path.join(os.path.dirname(__file__), 'tasks.db')
-ALLOWED_STATUSES = ('todo', 'in_progress', 'done')
-ALLOWED_PRIORITIES = ('low', 'medium', 'high')
+DB_CONFIG = {
+    'host': 'localhost',
+    'user': 'root',
+    'password': 'root',
+    'database': 'word_memory',
+    'charset': 'utf8mb4',
+    'cursorclass': pymysql.cursors.DictCursor,
+}
 
 def get_db():
     if 'db' not in g:
-        g.db = sqlite3.connect(DATABASE)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA journal_mode=WAL")
+        g.db = pymysql.connect(**DB_CONFIG)
     return g.db
 
 @app.teardown_appcontext
-def close_db(exception):
+def close_db(e):
     db = g.pop('db', None)
-    if db is not None:
-        db.close()
+    if db: db.close()
 
-def init_db():
-    with app.app_context():
-        db = get_db()
-        db.execute('''
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                description TEXT DEFAULT '',
-                status TEXT DEFAULT 'todo' CHECK(status IN ('todo','in_progress','done')),
-                priority TEXT DEFAULT 'medium' CHECK(priority IN ('low','medium','high')),
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        ''')
-        db.commit()
 
-def row_to_dict(row):
+# - SM-2 algorithm: quality 0-5, 0=blackout, 5=perfect recall
+def sm2(quality, ease_factor, review_interval, repetitions):
+    if quality < 3:
+        return max(1.3, ease_factor - 0.2), 1, 0
+    if repetitions == 0:
+        new_interval = 1
+    elif repetitions == 1:
+        new_interval = 6
+    else:
+        new_interval = max(1, round(review_interval * ease_factor))
+    new_ef = ease_factor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
+    return max(1.3, new_ef), new_interval, repetitions + 1
+
+
+def serialize_word(row):
     return {
-        'id': row['id'],
-        'title': row['title'],
-        'description': row['description'],
-        'status': row['status'],
-        'priority': row['priority'],
-        'created_at': row['created_at'],
-        'updated_at': row['updated_at']
+        'id': row['id'], 'word': row['word'], 'translation': row['translation'],
+        'part_of_speech': row['part_of_speech'], 'example': row['example'],
+        'notes': row['notes'], 'ease_factor': float(row['ease_factor']),
+        'review_interval': row['review_interval'], 'repetitions': row['repetitions'],
+        'next_review_at': row['next_review_at'].strftime('%Y-%m-%d %H:%M:%S') if row['next_review_at'] else None,
+        'created_at': row['created_at'].strftime('%Y-%m-%d %H:%M:%S'),
+        'updated_at': row['updated_at'].strftime('%Y-%m-%d %H:%M:%S'),
     }
 
-def validate_task_data(data):
-    errors = {}
-    if 'title' in data:
-        title = data['title'].strip()
-        if not title:
-            errors['title'] = 'Title is required'
-        elif len(title) > 200:
-            errors['title'] = 'Title must be less than 200 characters'
-    if 'status' in data and data['status'] not in ALLOWED_STATUSES:
-        errors['status'] = f'Status must be one of: {", ".join(ALLOWED_STATUSES)}'
-    if 'priority' in data and data['priority'] not in ALLOWED_PRIORITIES:
-        errors['priority'] = f'Priority must be one of: {", ".join(ALLOWED_PRIORITIES)}'
-    return errors
 
-@app.route('/api/tasks', methods=['GET'])
-def get_tasks():
+# GET /api/words - list all words (optional ?q=search)
+@app.route('/api/words', methods=['GET'])
+def list_words():
     db = get_db()
-    query = "SELECT * FROM tasks WHERE 1=1"
-    params = []
     search = request.args.get('q', '').strip()
-    if search:
-        query += " AND (title LIKE ? OR description LIKE ?)"
-        like = f'%{search}%'
-        params.extend([like, like])
-    status_filter = request.args.get('status', '').strip()
-    if status_filter and status_filter in ALLOWED_STATUSES:
-        query += " AND status = ?"
-        params.append(status_filter)
-    priority_filter = request.args.get('priority', '').strip()
-    if priority_filter and priority_filter in ALLOWED_PRIORITIES:
-        query += " AND priority = ?"
-        params.append(priority_filter)
-    query += " ORDER BY created_at DESC"
-    rows = db.execute(query, params).fetchall()
-    return jsonify([row_to_dict(r) for r in rows]), 200
+    with db.cursor() as cur:
+        if search:
+            cur.execute(
+                'SELECT * FROM words WHERE word LIKE %s OR translation LIKE %s ORDER BY created_at DESC',
+                (f'%{search}%', f'%{search}%'))
+        else:
+            cur.execute('SELECT * FROM words ORDER BY created_at DESC')
+        rows = cur.fetchall()
+    return jsonify([serialize_word(r) for r in rows])
 
-@app.route('/api/tasks', methods=['POST'])
-def create_task():
-    data = request.get_json() or {}
-    errors = validate_task_data({**data, 'title': data.get('title', '')})
-    if errors:
-        return jsonify({'error': 'Validation failed', 'details': errors}), 400
-    now = datetime.now().isoformat()
+
+# POST /api/words - add a word
+@app.route('/api/words', methods=['POST'])
+def add_word():
+    data = request.get_json(silent=True) or {}
+    word = data.get('word', '').strip()
+    translation = data.get('translation', '').strip()
+    if not word or not translation:
+        return jsonify({'error': 'word and translation required'}), 400
     db = get_db()
-    cursor = db.execute(
-        'INSERT INTO tasks (title, description, status, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-        (data['title'].strip(), data.get('description', '').strip(), 'todo', 'medium', now, now)
-    )
-    db.commit()
-    row = db.execute('SELECT * FROM tasks WHERE id = ?', (cursor.lastrowid,)).fetchone()
-    return jsonify(row_to_dict(row)), 201
+    with db.cursor() as cur:
+        cur.execute(
+            'INSERT INTO words (word, translation, part_of_speech, example, notes) VALUES (%s, %s, %s, %s, %s)',
+            (word, translation, data.get('part_of_speech', '').strip(),
+             data.get('example', '').strip(), data.get('notes', '').strip()))
+        new_id = cur.lastrowid
+        cur.execute('SELECT * FROM words WHERE id = %s', (new_id,))
+        row = cur.fetchone()
+        db.commit()
+    return jsonify(serialize_word(row)), 201
 
-@app.route('/api/tasks/<int:task_id>', methods=['GET'])
-def get_task(task_id):
-    row = get_db().execute('SELECT * FROM tasks WHERE id = ?', (task_id,)).fetchone()
-    if row is None:
-        return jsonify({'error': 'Task not found'}), 404
-    return jsonify(row_to_dict(row)), 200
 
-@app.route('/api/tasks/<int:task_id>', methods=['PUT'])
-def update_task(task_id):
-    row = get_db().execute('SELECT * FROM tasks WHERE id = ?', (task_id,)).fetchone()
-    if row is None:
-        return jsonify({'error': 'Task not found'}), 404
-    data = request.get_json() or {}
-    task = row_to_dict(row)
-    errors = validate_task_data({**data, 'title': data.get('title', task['title'])})
-    if errors:
-        return jsonify({'error': 'Validation failed', 'details': errors}), 400
-    title = data.get('title', task['title']).strip()
-    description = data.get('description', task['description']).strip()
-    status = data.get('status', task['status'])
-    priority = data.get('priority', task['priority'])
-    now = datetime.now().isoformat()
+# DELETE /api/words/<id>
+@app.route('/api/words/<int:word_id>', methods=['DELETE'])
+def delete_word(word_id):
     db = get_db()
-    db.execute(
-        'UPDATE tasks SET title = ?, description = ?, status = ?, priority = ?, updated_at = ? WHERE id = ?',
-        (title, description, status, priority, now, task_id)
-    )
-    db.commit()
-    row = db.execute('SELECT * FROM tasks WHERE id = ?', (task_id,)).fetchone()
-    return jsonify(row_to_dict(row)), 200
+    with db.cursor() as cur:
+        cur.execute('SELECT id FROM words WHERE id = %s', (word_id,))
+        if not cur.fetchone():
+            return jsonify({'error': 'word not found'}), 404
+        cur.execute('DELETE FROM words WHERE id = %s', (word_id,))
+        db.commit()
+    return jsonify({'message': 'deleted'})
 
-@app.route('/api/tasks/<int:task_id>', methods=['DELETE'])
-def delete_task(task_id):
-    row = get_db().execute('SELECT * FROM tasks WHERE id = ?', (task_id,)).fetchone()
-    if row is None:
-        return jsonify({'error': 'Task not found'}), 404
-    get_db().execute('DELETE FROM tasks WHERE id = ?', (task_id,))
-    get_db().commit()
-    return jsonify({'message': 'Task deleted'}), 200
+
+# GET /api/words/practice - words due for review
+@app.route('/api/words/practice', methods=['GET'])
+def get_practice_words():
+    db = get_db()
+    limit = request.args.get('limit', 10, type=int)
+    now = datetime.now()
+    with db.cursor() as cur:
+        cur.execute(
+            'SELECT * FROM words WHERE next_review_at <= %s ORDER BY next_review_at ASC LIMIT %s',
+            (now, min(limit, 50)))
+        rows = cur.fetchall()
+    return jsonify([serialize_word(r) for r in rows])
+
+
+# PATCH /api/words/<id>/review - submit review with SM-2
+@app.route('/api/words/<int:word_id>/review', methods=['PATCH'])
+def review_word(word_id):
+    data = request.get_json(silent=True) or {}
+    quality = data.get('quality', 0)
+    if not isinstance(quality, int) or quality < 0 or quality > 5:
+        return jsonify({'error': 'quality must be 0-5'}), 400
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute('SELECT * FROM words WHERE id = %s', (word_id,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({'error': 'word not found'}), 404
+        ef, interval, reps = sm2(quality, float(row['ease_factor']), row['review_interval'], row['repetitions'])
+        next_review = datetime.now() + timedelta(days=interval)
+        cur.execute(
+            'UPDATE words SET ease_factor=%s, review_interval=%s, repetitions=%s, next_review_at=%s WHERE id=%s',
+            (ef, interval, reps, next_review, word_id))
+        db.commit()
+        cur.execute('SELECT * FROM words WHERE id = %s', (word_id,))
+        updated = cur.fetchone()
+    return jsonify(serialize_word(updated))
+
+
+# GET /api/words/stats
+@app.route('/api/words/stats', methods=['GET'])
+def get_stats():
+    db = get_db()
+    now = datetime.now()
+    with db.cursor() as cur:
+        cur.execute('SELECT COUNT(*) AS total FROM words')
+        total = cur.fetchone()['total']
+        cur.execute('SELECT COUNT(*) AS due FROM words WHERE next_review_at <= %s', (now,))
+        due = cur.fetchone()['due']
+        cur.execute('SELECT AVG(ease_factor) AS avg_ef FROM words')
+        avg_ef = cur.fetchone()['avg_ef'] or 0
+        cur.execute('SELECT COUNT(*) AS mastered FROM words WHERE repetitions >= 5')
+        mastered = cur.fetchone()['mastered']
+    return jsonify({
+        'total': total, 'due': due,
+        'avg_ease_factor': round(float(avg_ef), 2),
+        'mastered': mastered,
+    })
+
 
 if __name__ == '__main__':
-    init_db()
     app.run(debug=True, port=5000)
