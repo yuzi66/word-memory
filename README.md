@@ -54,5 +54,5 @@ npm run dev
 
 ## 部署
 
-- 前端: Vercel
-- 后端: Render / Railway
+- 前端: word-memory-one.vercel.app
+- 后端: word-memory-production.up.railway.app
